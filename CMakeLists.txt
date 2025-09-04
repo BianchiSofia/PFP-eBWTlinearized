@@ -51,4 +51,4 @@ endif()
 
 include_directories(${PROJECT_SOURCE_DIR})
 
-configure_file(${PROJECT_SOURCE_DIR}/pfpebwt ${PROJECT_BINARY_DIR}/pfpebwt)
+configure_file(${PROJECT_SOURCE_DIR}/pfpebwtlinearized ${PROJECT_BINARY_DIR}/pfpebwtlinearized)

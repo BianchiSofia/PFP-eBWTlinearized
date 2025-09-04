@@ -1,10 +1,10 @@
 /*
- * PFP parse implementation to compute the circular Prefix-free parse of a collection of sequences.
+ * PFP parse implementation to compute the non-circular Prefix-free parse of a collection of sequences.
  * 
  * This code is adapted from https://github.com/alshai/Big-BWT/blob/master/newscan.cpp
  *
  */
-
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -56,6 +56,40 @@ struct word_stats {
   occ_int_t occ;  // no. of phrases
   word_int_t rank=0; // rank of the phrase
 };
+
+// bitvector to keep track of the positions of the '$' terminators
+struct BitvectorTerminators {
+  vector<uint64_t> positions; 
+  vector<int> sequence_numbers;
+
+  // Modify the function to match the call site
+  void add_terminator_position(uint64_t pos, int seq_num = -1) {
+      positions.push_back(pos);
+      sequence_numbers.push_back(seq_num);
+  }
+  
+  void save_to_file(const string& filename) {
+      FILE *f = fopen((filename + ".term").c_str(), "wb");
+      if (!f) die("Cannot open terminator positions file for writing");
+      
+      uint64_t size = positions.size();
+      if (fwrite(&size, sizeof(size), 1, f) != 1) 
+          die("Error writing terminator count");
+      
+      for (uint64_t pos : positions) {
+          if (fwrite(&pos, sizeof(pos), 1, f) != 1)
+              die("Error writing terminator position");
+      }
+      
+      fclose(f);
+  }
+};
+
+// Global bitvector 
+BitvectorTerminators terminatorPositions;
+std::map<std::string, int> terminator_sequence_order; 
+int global_sequence_counter = 0; 
+
 
 void print_help(char** argv, Args &args) {
   cout << "Usage: " << argv[ 0 ] << " <input filename> [options]" << endl;
@@ -180,7 +214,6 @@ struct KR_window {
   ~KR_window() {
     delete[] window;
   }
-
 };
 
 static void save_update_word(string& w, unsigned int minsize, map<uint64_t,word_stats>& freq, FILE *tmp_parse_file, bool last_word);
@@ -203,55 +236,51 @@ uint64_t kr_hash(string s) {
     return hash;
 }
 
-// save current word in the freq map and update it leaving only the
-// last minsize chars which is the overlap with next word
-static void save_update_word(string& w, unsigned int minsize,map<uint64_t,word_stats>&  freq, FILE *tmp_parse_file, bool last_word)
+static void save_update_word(string& w, unsigned int minsize, map<uint64_t,word_stats>& freq, FILE *tmp_parse_file, bool last_word)
 {
-  assert(w.size() >= minsize);
-  if(w.size() <= minsize) return;
-  // get the hash value and write it to the temporary parse file
+  if(w.size() <= minsize) {
+    return;
+  }
+  
+  // Get the hash value and write it to the temporary parse file
   uint64_t hash = kr_hash(w);
-  if(fwrite(&hash,sizeof(hash),1,tmp_parse_file)!=1) die("parse write error");
-  if(last_word){
-      string lw(minsize,Dollar);
-      uint64_t hash = kr_hash(lw);
-      if(fwrite(&hash,sizeof(hash),1,tmp_parse_file)!=1) die("parse write error");
-  } 
-
-#ifndef NOTHREADS
-  xpthread_mutex_lock(&map_mutex,__LINE__,__FILE__);
-#endif
-  // update frequency table for current hash
-  if(freq.find(hash)==freq.end()) {
-      freq[hash].occ = 1; // new hash
-      freq[hash].str = w;
+  
+  if(fwrite(&hash, sizeof(hash), 1, tmp_parse_file) != 1) 
+    die("parse write error");
+  
+  // Update frequency table for current hash
+  if (freq.find(hash) == freq.end()) {
+    freq[hash].occ = 1; // new hash
+    freq[hash].str = w;
+  } else {
+    freq[hash].occ += 1; // known hash - + occ
+    
+    if (freq[hash].occ <= 0) {
+      cerr << "Emergency exit! Maximum # of occurrence of dictionary word exceeded\n";
+      exit(1);
+    }
+    if (freq[hash].str != w) {
+      cerr << "Emergency exit! Hash collision for strings:\n";
+      cerr << freq[hash].str << "\n  vs\n" <<  w << endl;
+      exit(1);
+    }
   }
-  else {
-      freq[hash].occ += 1; // known hash
-      if(freq[hash].occ <=0) {
-        cerr << "Emergency exit! Maximum # of occurence of dictionary word (";
-        cerr<< MAX_WORD_OCC << ") exceeded\n";
-        exit(1);
-      }
-      if(freq[hash].str != w) {
-        cerr << "Emergency exit! Hash collision for strings:\n";
-        cerr << freq[hash].str << "\n  vs\n" <<  w << endl;
-        exit(1);
-      }
+  
+  if (last_word) {
+    return;
   }
-#ifndef NOTHREADS
-  xpthread_mutex_unlock(&map_mutex,__LINE__,__FILE__);
-#endif
   
   // keep only the overlapping part of the window
-  w.erase(0,w.size() - minsize);
+  w.erase(0, w.size() - minsize);
 }
 
-// circular prefix free parse of fname, w is the window size, p is the modulus
+
+
+
+// Non-circular prefix free parse of fname, w is the window size, p is the modulus
 // use a KR-hash as the word ID that is immediately written to the parse file
 uint64_t parse_fasta(Args& arg, map<uint64_t,word_stats>& wordFreq)
 {
-    //open a, possibly compressed, input file
     string fnam = arg.inputFileName;
   
     // open the 1st pass parsing file
@@ -261,113 +290,238 @@ uint64_t parse_fasta(Args& arg, map<uint64_t,word_stats>& wordFreq)
   
     // main loop on the chars of the input file
     uint8_t c;
-    KR_window krw(arg.w);
     uint64_t total_char = 0;
+    uint64_t sequence_pos = 0;
+    uint64_t seq_number = 0;
+    
+    vector<size_t> sequence_start_hashes;
     
     gzFile fp;
     kseq_t *seq;
     long int l;
-    //p st;
     fp = gzopen(fnam.c_str(), "r");
     seq = kseq_init(fp);
     int seqn=0;
-    while ((l =  kseq_read(seq)) >= 0) {
+    
+    while ((l = kseq_read(seq)) >= 0) {
         seqn++;
-        bool f_trg = 0;
-        uint64_t start_char=0; size_t i=0;
-        string first_word(""); string next_word(""); 
-        for (i = 0; i < seq->seq.l; i++) {
+        seq_number++;
+        
+        string current_sequence(seq->seq.s, seq->seq.l);
+        
+        KR_window krw(arg.w); 
+        string current_word = ""; 
+        bool found_first_trigger = false;
+        uint64_t last_trigger_pos = 0;
+        
+        uint64_t sequence_absolute_start = 0;
+        if (fwrite(&sequence_absolute_start, sizeof(sequence_absolute_start), 1, offset_file) != 1) 
+            die("offset write error");
+        
+        // Process each character in the sequence
+        for (size_t i = 0; i < seq->seq.l; i++) {
             c = std::toupper(seq->seq.s[i]);
-            if (c <= Dollar) {cerr << "Invalid char found in input file: no additional chars will be read\n"; break;}
-            next_word.append(1, c);
+            if (c <= Dollar) {
+                cerr << "Invalid char found in input file: no additional chars will be read\n";
+                break;
+            }
+            
+            current_word.append(1, c);
             uint64_t hash = krw.addchar(c);
-            if (hash%arg.p==0 && krw.current == arg.w) {
-                start_char = i; f_trg = 1;
-                if(fwrite(&start_char,sizeof(start_char),1,offset_file)!=1) die("offset write error");
-                first_word = string(next_word);
-                next_word.erase(0,next_word.size() - arg.w); break;
+            
+            // Check if this is a trigger position (hash % p == 0 and window is full)
+            if (hash % arg.p == 0 && krw.current == arg.w) {
+                
+                if (!found_first_trigger) {
+                    // First trigger in this sequence
+                    found_first_trigger = true;
+                    
+                    current_word.insert(0, "$"); // Add terminator at the start
+  
+                    // Add the first w-tuple to the dictionary
+                    uint64_t first_hash = kr_hash(current_word);
+                    if (fwrite(&first_hash, sizeof(first_hash), 1, parse_file) != 1) 
+                        die("parse write error");
+
+              
+                    sequence_start_hashes.push_back(first_hash);
+                    
+                    // Update frequency table
+                    if (wordFreq.find(first_hash) == wordFreq.end()) {
+                        wordFreq[first_hash].occ = 1;
+                        wordFreq[first_hash].str = current_word;
+              
+                    } else {
+                        wordFreq[first_hash].occ += 1;
+                        if (wordFreq[first_hash].str != current_word) {
+                            cerr << "Hash collision detected!\n";
+                            exit(1);
+                        }
+                    }
+                    
+                    // Keep only the last w characters for the next phrase
+                    last_trigger_pos = i;
+                    current_word = current_word.substr(current_word.size() - arg.w);
+                                
+                  } else {
+                    // Not the first trigger, save the word from last trigger to here
+              
+                    save_update_word(current_word, arg.w, wordFreq, parse_file, false);
+                    
+                    // Keep only the last w characters for the next phrase
+                    last_trigger_pos = i;
+                    current_word = current_word.substr(current_word.size() - arg.w);
+
+                }
             }
         }
-        for (i=i+1; i< seq->seq.l; i++){
-            c = std::toupper(seq->seq.s[i]);
-            next_word.append(1, c);
-            uint64_t hash = krw.addchar(c);
-            if (hash%arg.p==0) {
-                save_update_word(next_word,arg.w,wordFreq,parse_file,0);
-            }
-        }
+        
+        if (!found_first_trigger) {
+            string terminator = "$";
+            current_word.append(terminator);
            
-        total_char += krw.tot_char;
-        if(f_trg) { assert(first_word.size() >= arg.w); }
-        // check if exist a trigger string in final word
-        if(!f_trg) first_word = next_word.substr(0,arg.w - 1);
-        for (i = 0; i < arg.w - 1; i++) {
-            c = first_word[i];
-            next_word.append(1, c);
-            uint64_t hash = krw.addchar(c);
-            if(hash%arg.p==0){
-                if(!f_trg) { start_char = krw.tot_char; f_trg = 1; if(fwrite(&start_char,sizeof(start_char),1,offset_file)!=1) die("offset write error"); 
-                            first_word = string(next_word);
-                            next_word.erase(0,next_word.size() - arg.w); }
-                else{
-                    save_update_word(next_word,arg.w,wordFreq,parse_file,0); }
+            terminator_sequence_order[current_word] = global_sequence_counter++;
+            current_word.insert(0, terminator); // Add terminator at the start
+
+            // Add to dictionary
+            uint64_t hash = kr_hash(current_word);
+            if (fwrite(&hash, sizeof(hash), 1, parse_file) != 1) 
+                die("parse write error");
+            
+            sequence_start_hashes.push_back(hash);
+            
+            // Update frequency table
+            if (wordFreq.find(hash) == wordFreq.end()) {
+                wordFreq[hash].occ = 1;
+                wordFreq[hash].str = current_word;
+            } else {
+                wordFreq[hash].occ += 1;
+                if (wordFreq[hash].str != current_word) {
+                    cerr << "Hash collision detected!\n";
+                    exit(1);
+                }
             }
+        } else {
+            string terminator = "$";
+            current_word.append(terminator);
+            
+            terminator_sequence_order[current_word] = global_sequence_counter++;
+            
+            // Save the final word to the dictionary 
+            save_update_word(current_word, arg.w, wordFreq, parse_file, true);
         }
-        if(!f_trg) { cerr << "No trigger strings found. Please use '--reads' flag. Exiting..." << endl; exit(1); }
-        // join first and last word
-        string final_word = next_word + first_word.erase(0,arg.w-1);
-        save_update_word(final_word,arg.w,wordFreq,parse_file,1);
-        krw.reset();
-        if (c <= Dollar) break;
+        
+        // Save the position of the terminator
+        terminatorPositions.add_terminator_position(sequence_pos + krw.tot_char, seq_number);
+        
+        total_char += krw.tot_char;
+        sequence_pos += krw.tot_char;
+
     }
+    
     kseq_destroy(seq);
     gzclose(fp);
 
     // close input and output files
     if(fclose(parse_file)!=0) die("Error closing parse file");
     if(fclose(offset_file)!=0) die("Error closing offset file");
-
+    
+    // Save the bitvector of terminator positions
+    terminatorPositions.save_to_file(arg.inputFileName);
+    
+    std::string seqstart_filename = arg.inputFileName + ".seqstart";
+    FILE* seqstart_file = fopen(seqstart_filename.c_str(), "wb");
+    if (!seqstart_file) die("Cannot open sequence start file for writing");
+    
+    size_t num_starts = sequence_start_hashes.size();
+    if (fwrite(&num_starts, sizeof(num_starts), 1, seqstart_file) != 1)
+        die("Error writing number of sequence starts");
+    
+    for (uint64_t hash : sequence_start_hashes) {
+        if (fwrite(&hash, sizeof(hash), 1, seqstart_file) != 1)
+            die("Error writing sequence start hash");
+    }
+    
+    fclose(seqstart_file);
+    
     return total_char;
 }
+
+bool pstringCompare(const string *a, const string *b);
 
 // given the sorted dictionary and the frequency map write the dictionary and occ files
 // also compute the 1-based rank for each hash
 void writeDictOcc(Args &arg, map<uint64_t,word_stats> &wfreq, vector<const string *> &sortedDict)
-{
-  assert(sortedDict.size() == wfreq.size());
-  FILE *fdict;
-  fdict = open_aux_file(arg.inputFileName.c_str(),EXTDICT,"wb");
-  FILE *focc = open_aux_file(arg.inputFileName.c_str(),EXTOCC,"wb");
+{  
+  vector<pair<string, word_stats*>> dict_entries;
+  for (auto& entry : wfreq) {
+    dict_entries.push_back({entry.second.str, &entry.second});
+  }
+  
+  sort(dict_entries.begin(), dict_entries.end(), 
+       [](const auto& a, const auto& b) {
+         return pstringCompare(&a.first, &b.first);
+       });
+  
+  FILE *fdict = open_aux_file(arg.inputFileName.c_str(), EXTDICT, "wb");
+  FILE *focc = open_aux_file(arg.inputFileName.c_str(), EXTOCC, "wb");
 
   word_int_t wrank = 1; // current word rank (1 based)
-  for(auto x: sortedDict) {
-    const char *word = (*x).data();       // current dictionary word
-    int offset=0; size_t len = (*x).size();  // offset and length of word
-    assert(len>(size_t)arg.w);
-    size_t s = fwrite(word,1,len, fdict);
-    if(s!=len) die("Error writing to DICT file");
-    if(fputc(EndOfWord,fdict)==EOF) die("Error writing EndOfWord to DICT file");
-    uint64_t hash = kr_hash(*x);
-    auto& wf = wfreq.at(hash);
-    assert(wf.occ>0);
-    s = fwrite(&wf.occ,sizeof(wf.occ),1, focc);
-    if(s!=1) die("Error writing to OCC file");
-    assert(wf.rank==0);
-    wf.rank = wrank++;
+  
+  for (const auto& entry : dict_entries) {
+    const string& word = entry.first;
+    word_stats* wf = entry.second;
+    
+    size_t len = word.size();
+    assert(len > (size_t)arg.w);
+    
+    size_t s = fwrite(word.data(), 1, len, fdict);
+    if(s != len) die("Error writing to DICT file");
+    if(fputc(EndOfWord, fdict) == EOF) die("Error writing EndOfWord to DICT file");
+    
+    assert(wf->occ > 0);
+    s = fwrite(&wf->occ, sizeof(wf->occ), 1, focc);
+    if(s != 1) die("Error writing to OCC file");
+    
+    assert(wf->rank == 0);  
+    wf->rank = wrank++;
   }
-  if(fputc(EndOfDict,fdict)==EOF) die("Error writing EndOfDict to DICT file");
-  if(fclose(focc)!=0) die("Error closing OCC file");
-  if(fclose(fdict)!=0) die("Error closing DICT file");
+  
+  if(fputc(EndOfDict, fdict) == EOF) die("Error writing EndOfDict to DICT file");
+  if(fclose(focc) != 0) die("Error closing OCC file");
+  if(fclose(fdict) != 0) die("Error closing DICT file");
 }
 
 // function used to compare two string pointers
 bool pstringCompare(const string *a, const string *b)
 {
-  return *a <= *b;
+    const string& sa = *a;
+    const string& sb = *b;
+    
+    for (size_t i = 0; i < min(sa.size(), sb.size()); i++) {
+        if (sa[i] == '$' && sb[i] != '$') return true;
+        if (sa[i] != '$' && sb[i] == '$') return false;
+        
+        if (sa[i] == '$' && sb[i] == '$') {
+            auto it_a = terminator_sequence_order.find(sa);
+            auto it_b = terminator_sequence_order.find(sb);
+            
+            if (it_a != terminator_sequence_order.end() && 
+                it_b != terminator_sequence_order.end()) {
+                return it_a->second < it_b->second;
+            }
+            
+            return sa < sb;  // lex
+        }
+        
+        if (sa[i] != sb[i]) return sa[i] < sb[i];
+    }
+    
+    return sa.size() < sb.size();
 }
 
 void remapParse(Args &arg, map<uint64_t,word_stats> &wfreq, int th)
-{
+{  
   // open parse files. the old parse can be stored in a single file or in multiple files
   mFile *moldp = mopen_aux_file(arg.inputFileName.c_str(), EXTPARS0, th);
   mFile *moff = mopen_aux_file(arg.inputFileName.c_str(), EXTOFF0, th);
@@ -380,54 +534,93 @@ void remapParse(Args &arg, map<uint64_t,word_stats> &wfreq, int th)
   vector<occ_int_t> occ(wfreq.size()+1,0); // ranks are zero based
   uint64_t hash, phash, fc;
   uint64_t start = 0, len = 0;
-  string separator(arg.w,Dollar);
-  uint64_t hash_sep = kr_hash(separator);
   set<p> startChr;
-
+  
+  vector<uint64_t> offsets;
+  while(true) {
+    uint64_t offset;
+    size_t s = mfread(&offset, sizeof(offset), 1, moff);
+    if(s == 0) break;
+    if(s != 1) die("Error reading offset file");
+    offsets.push_back(offset);
+  }
+  
+  if(mfclose(moff) != 0) die("Error closing offset file");
+  moff = mopen_aux_file(arg.inputFileName.c_str(), EXTOFF0, th);
+  
+  size_t offset_idx = 0;
+  bool expecting_sequence_start = true; 
+  size_t word_counter = 0;
+  
   while(true) {
     size_t s = mfread(&hash,sizeof(hash),1,moldp);
     if(s==0) break;
     if(s!=1) die("Unexpected parse EOF");
-    if(hash != hash_sep){
-        len++;
-        word_int_t rank = wfreq.at(hash).rank;
-        occ[rank]++;
-        phash = hash;
-        s = fwrite(&rank,sizeof(rank),1,newp);
-        if(s!=1) die("Error writing to new parse file");}
-    else{
+    
+    word_counter++;
+    len++;
+    
+    auto it = wfreq.find(hash);
+    if (it == wfreq.end()) {
+      die("Hash not found in updated dictionary");
+    }
+    
+    word_int_t rank = it->second.rank;
+    string current_word = it->second.str;
+  
+    bool contains_dollar = (current_word.find('$') != string::npos);
+    bool starts_with_dollar = (!current_word.empty() && current_word[0] == '$');
+    bool ends_with_dollar = (!current_word.empty() && current_word.back() == '$');
+      
+    occ[rank]++;
+    phash = hash;
+    s = fwrite(&rank,sizeof(rank),1,newp);
+    if(s!=1) die("Error writing to new parse file");
+    
+    if (expecting_sequence_start) {
         s = fwrite(&start,sizeof(start),1,strt);
         if(s!=1) die("Error writing to start file");
-        start += len;
-        len=0;
-        s = mfread(&fc,sizeof(fc),1,moff);
-        if(s!=1) die("Unexpected offset EOF");
-        word_int_t rank = wfreq.at(phash).rank;
-        uint64_t len = wfreq.at(phash).str.length();
-        uint32_t off = uint32_t(len-fc-1);
-        s = fwrite(&off,sizeof(off),1,newoff);
-        if(s!=1) die("Error writing to new offset file");
-        p st = p(rank,off);
-        //if(startFreq.find(st)==startFreq.end()){
-        //    startFreq[st] = 1;
-        //    }else{startFreq[st]+=1;}
-        if(startChr.find(st)==startChr.end()){ startChr.insert(st); }    
+        p st = p(rank, 0);
+        if(startChr.find(st) == startChr.end()) {
+            startChr.insert(st);
         }
+        
+        expecting_sequence_start = false;
     }
+    
+    if (ends_with_dollar) {
+        if(offset_idx < offsets.size()) {
+            fc = offsets[offset_idx];
+            size_t last_dollar = current_word.rfind('$');
+            uint32_t off = (last_dollar != string::npos) ? uint32_t(last_dollar) : uint32_t(fc);
+            
+            s = fwrite(&off,sizeof(off),1,newoff);
+            if(s!=1) die("Error writing to new offset file");
+            
+            offset_idx++;
+        } else {
+            uint32_t off = 0;
+            s = fwrite(&off,sizeof(off),1,newoff);
+            if(s!=1) die("Error writing to new offset file");
+        }
+        
+        start += len;
+        len = 0;
+        
+        expecting_sequence_start = true;
+    }
+  }
 
   for (auto& x: startChr) {
-      if(fwrite(&x,sizeof(x),1,fchar)!=1) die("error writing to first char file");
+    if(fwrite(&x,sizeof(x),1,fchar)!=1) die("error writing to first char file");
   }
-    
+  
   if(fclose(newp)!=0) die("Error closing new parse file");
   if(fclose(fchar)!=0) die("Error closing first char positions file");
   if(mfclose(moldp)!=0) die("Error closing old parse segment");
   if(mfclose(moff)!=0) die("Error closing offset file");
   if(fclose(strt)!=0) die("Error closing starting positions file");
   if(fclose(newoff)!=0) die("Error closing new offsets file");
-  // check old and recomputed occ coincide
-  for(auto& x : wfreq)
-    assert(x.second.occ == occ[x.second.rank]);
 }
 
 int main(int argc, char** argv) {
@@ -435,10 +628,7 @@ int main(int argc, char** argv) {
     // translate command line parameters
     Args arg;
     parseArgs(argc, argv, arg);
-    cout << "File name: " << arg.inputFileName << endl;
-    cout << "Windows size: " << arg.w << endl;
-    cout << "Stop word modulus: " << arg.p << endl;
-    
+
     // measure elapsed wall clock time
     time_t start_main = time(NULL);
     time_t start_wc = start_main;
@@ -457,6 +647,9 @@ int main(int argc, char** argv) {
             #else
             Res res = parallel_parse_fasta(arg, wordFreq);
             totChar = res.tot_char; nt = res.us_th;
+            for (uint64_t pos : res.terminator_positions) {
+              terminatorPositions.add_terminator_position(pos);
+            }
             #endif
         }
     }
@@ -468,6 +661,7 @@ int main(int argc, char** argv) {
     uint64_t totDWord = wordFreq.size();
     cout << "Total input symbols: " << totChar << endl;
     cout << "Found " << totDWord << " distinct words" <<endl;
+    cout << "Number of sequences: " << terminatorPositions.positions.size() << endl;
     cout << "Parsing took: " << difftime(time(NULL),start_wc) << " wall clock seconds\n";
     // check # distinct words
     if(totDWord>MAX_DISTINCT_WORDS) {
@@ -492,13 +686,60 @@ int main(int argc, char** argv) {
     assert(dictArray.size()==totDWord);
     cout << "Sum of lenghts of dictionary words: " << sumLen << endl;
     cout << "Total number of words: " << totWord << endl;
-    // sort dictionary
-    sort(dictArray.begin(), dictArray.end(),pstringCompare);
+    
+    vector<string> sorted_phrases;
+
+    for (auto& x: wordFreq) {
+      size_t dollar_pos = x.second.str.find('$');
+      if (dollar_pos != string::npos) {
+          string word = x.second.str;
+          
+          if (dollar_pos == word.size() - 1) {
+              sorted_phrases.push_back({word}); 
+          } else {
+              sorted_phrases.push_back({word});
+          }
+      }
+    }
+    sort(sorted_phrases.begin(), sorted_phrases.end(), 
+        [](const string& a, const string& b) { return pstringCompare(&a, &b); });
+
+    sort(dictArray.begin(), dictArray.end(), pstringCompare);
+    
+    for (size_t i = 0; i < dictArray.size(); i++) {
+        std::string word = *dictArray[i];
+        size_t dollar_pos = word.find('$');
+    }
+
     // write plain dictionary and occ file, also compute rank for each hash
     cout << "Writing plain dictionary and occ file\n";
     writeDictOcc(arg, wordFreq, dictArray);
     dictArray.clear(); // reclaim memory
     cout << "Dictionary construction took: " << difftime(time(NULL),start_wc) << " wall clock seconds\n";
+    
+
+    std::map<int, uint64_t> original_terminator_positions; // seq_num -> posizione
+    for (size_t i = 0; i < terminatorPositions.positions.size(); i++) {
+        int seq_num = i + 1;
+        uint64_t pos = terminatorPositions.positions[i];
+        original_terminator_positions[seq_num] = pos;
+    }
+
+    std::string termpos_filename = arg.inputFileName + ".termpos";
+    FILE* termpos_file = fopen(termpos_filename.c_str(), "wb");
+    if (!termpos_file) die("Cannot open terminator positions file for writing");
+
+    size_t num_terms = original_terminator_positions.size();
+    if (fwrite(&num_terms, sizeof(num_terms), 1, termpos_file) != 1)
+        die("Error writing number of terminators");
+
+    for (const auto& [seq_num, pos] : original_terminator_positions) {
+        if (fwrite(&seq_num, sizeof(seq_num), 1, termpos_file) != 1)
+            die("Error writing sequence number");
+        if (fwrite(&pos, sizeof(pos), 1, termpos_file) != 1)
+            die("Error writing terminator position");
+    }
+    fclose(termpos_file);
     
     // remap parse file
     start_wc = time(NULL);
@@ -509,4 +750,3 @@ int main(int argc, char** argv) {
     
     return 0;
 }
-

@@ -6,12 +6,12 @@ include_directories(${INCLUDE_DIR_UT})
 include_directories(${INCLUDE_DIR_ALGO})
 include_directories(${INCLUDE_DIR_SAIS})
 
-
 add_executable(parsebwtNT.x ${INCLUDE_DIR_ALGO}/parse.cpp ${INCLUDE_DIR_UT}/utils.c ${INCLUDE_DIR_SAIS}/csais.cpp)
 target_link_libraries(parsebwtNT.x malloc_count dl sdsl divsufsort divsufsort64)
 
 add_executable(parsebwtNT64.x ${INCLUDE_DIR_ALGO}/parse.cpp ${INCLUDE_DIR_UT}/utils.c ${INCLUDE_DIR_SAIS}/csais.cpp)
-target_link_libraries(parsebwtNT64.x malloc_count dl sdsl divsufsort divsufsort64)
+target_link_libraries(parsebwtNT64.x malloc_count dl sdsl divsufsort 
+divsufsort64)
 target_compile_options(parsebwtNT64.x PUBLIC "-DP64")
 
 add_executable(parsebwtgcaNT.x ${INCLUDE_DIR_ALGO}/parse-gca.cpp ${INCLUDE_DIR_UT}/utils.c ${INCLUDE_DIR_SAIS}/csais.cpp)
@@ -39,3 +39,4 @@ target_compile_options(build-ebwt-gca_64.x PUBLIC "-DP64")
 
 add_executable(invertNT.x invertebwt.cpp ${INCLUDE_DIR_UT}/common.hpp)
 target_link_libraries(invertNT.x sdsl divsufsort divsufsort64)
+

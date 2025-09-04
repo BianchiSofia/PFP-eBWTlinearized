@@ -25,6 +25,42 @@ def main():
     parser.add_argument('--verbose',  help='verbose (def. False)',action='store_true')
     args = parser.parse_args()
 
+    if args.GCA:
+        print("\n" + "="*50)
+        print("ERRORE: Funzionalità non implementata")
+        print("="*50)
+        print("L'opzione --GCA non è stata ancora implementata.")
+        print("Questa funzionalità richiede la gestione completa dei")
+        print("terminatori che non è ancora supportata in questa")
+        print("versione del progetto.")
+        print("\nFunzionalità disponibili:")
+        print("="*50)
+        sys.exit(1)
+    
+    if args.samples:
+        print("\n" + "="*50)
+        print("ERRORE: Funzionalità non implementata")
+        print("="*50)
+        print("L'opzione --samples non è stata ancora implementata.")
+        print("Questa funzionalità richiede la gestione completa dei")
+        print("terminatori che non è ancora supportata in questa")
+        print("versione del progetto.")
+        print("\nFunzionalità disponibili:")
+        print("="*50)
+        sys.exit(1)
+    
+    if args.period:
+        print("\n" + "="*50)
+        print("ERRORE: Funzionalità non implementata")
+        print("="*50)
+        print("L'opzione --period non è stata ancora implementata.")
+        print("Questa funzionalità per la rimozione delle sequenze")
+        print("periodiche non è ancora supportata in questa")
+        print("versione del progetto.")
+        print("\nFunzionalità disponibili:")
+        print("="*50)
+        sys.exit(1)
+
     dirname = os.path.dirname(os.path.abspath(__file__))
     parse_exe         =  os.path.join(dirname, "include/PFP-algos/circpfp.x")
     parseNT_exe       =  os.path.join(dirname, "include/PFP-algos/circpfpNT.x")

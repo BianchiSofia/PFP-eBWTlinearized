@@ -1,20 +1,23 @@
 /*
- * Multithread Prefix-free parse implementation to compute the circular PFP of sequence collections.
+ * Multithread Prefix-free parse implementation to compute the non-circular PFP of sequence collections.
  * 
  * This code is adapted from https://github.com/alshai/Big-BWT/blob/master/newscan.hpp
  *
  */
-
+#include <cstdint>
 extern "C" {
 #include "xerrors.h"
 }
 #include <vector>
 #include <istream>
+uint64_t kr_hash(string s);
 pthread_mutex_t map_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t terminator_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 struct Res {
     size_t tot_char = 0;
     int us_th = 0;
+    std::vector<uint64_t> terminator_positions;
 };
 
 // struct shared via mt_parse
@@ -24,10 +27,11 @@ typedef struct {
   size_t true_start, true_end; // input
   size_t parsed, words;  // output
   FILE *parse, *o;
+  vector<uint64_t> terminator_positions; 
 } mt_data;
 
-// modified from mt_parse to skip newlines and fasta header lines (ie. lines starting with ">")
-void *cyclic_mt_parse_fasta(void *dx)
+// modified to handle terminators and non-circular parsing
+void *non_circular_mt_parse_fasta(void *dx)
 {
   // extract input data
   mt_data *d = (mt_data *) dx;
@@ -48,76 +52,144 @@ void *cyclic_mt_parse_fasta(void *dx)
   // prepare for parsing
   f.seekg(d->true_start); // move to the beginning of assigned region
   KR_window krw(arg->w);
-  uint8_t c, pc = '\n'; string word = ""; string fword = ""; string final_word = "";
-  uint64_t start_char = 0;
-  bool first_trigger = 0;
+  uint8_t c, pc = '\n';
+  uint64_t base_pos = d->true_start; 
+  uint64_t global_seq_number = 0; // Global sequence number counter
   
   // skip the header
-  uint64_t current_pos = d->true_start; uint64_t i=0;
-  // step when we find the newline
-  while((c != '\n')){
-      c = f.get();
-      current_pos++;
+  uint64_t current_pos = d->true_start;
+  while((c = f.get()) != '\n' && current_pos < d->true_end) {
+    current_pos++;
+    // Count sequence headers we've passed to determine global sequence number
+    if (c == '>')
+      global_seq_number++;
   }
   pc = c;
-  //assert(is_valid_base(std::toupper(f.peek())));
-  // parse the sequence
-  while( (pc != EOF) && current_pos <= d->true_end) {
-      c = f.get();
-      current_pos++;
+  
+  // parse the sequence(s)
+  string current_word = "";
+  bool found_first_trigger = false;
+  uint64_t i = 0; // Position in the current sequence
+  uint64_t last_trigger_pos = 0;
+  uint64_t local_seq_number = 0; // Local sequence counter for this thread
+  
+  while((pc != EOF) && current_pos < d->true_end) {
+    c = f.get();
+    current_pos++;
+    
+    if(c > 64) { // A is 65 in ascii table
       c = std::toupper(c);
-      //if(is_valid_base(c)){
-      if(c > 64){ // A is 65 in ascii table. 
-          if(c<= Dollar || c> 90) die("Invalid char found in input file. Exiting...");
-          word.append(1, c);
-          if(first_trigger == 0){fword.append(1, c);}
-          uint64_t hash = krw.addchar(c);
-            if (hash%arg->p==0 && krw.current == arg->w){
-                if(first_trigger==0){
-                    first_trigger = 1, start_char = i;
-                    if(fwrite(&start_char,sizeof(start_char),1,d->o)!=1) die("offset write error");
-                    word.erase(0,word.size() - arg->w);
-                }
-                else{
-                    save_update_word(word,arg->w,*wordFreq,d->parse,0);
-                    d->words++;
-                }
+      if(c <= Dollar || c > 90) die("Invalid char found in input file. Exiting...");
+      
+      current_word.append(1, c);
+      uint64_t hash = krw.addchar(c);
+      
+      // Check if this is a trigger position
+      if (hash % arg->p == 0 && krw.current == arg->w) {
+        if (!found_first_trigger) {
+          // First trigger in this sequence
+          found_first_trigger = true;
+          
+          // Save the position of the first trigger
+          uint64_t start_char = i - arg->w + 1;
+          if(fwrite(&start_char, sizeof(start_char), 1, d->o) != 1) 
+            die("offset write error");
+          
+          // Add the first w-tuple to the dictionary
+          uint64_t first_hash = kr_hash(current_word);
+          if(fwrite(&first_hash, sizeof(first_hash), 1, d->parse) != 1) 
+            die("parse write error");
+          
+          // Update frequency table
+          xpthread_mutex_lock(&map_mutex, __LINE__, __FILE__);
+          if (wordFreq->find(first_hash) == wordFreq->end()) {
+            (*wordFreq)[first_hash].occ = 1;
+            (*wordFreq)[first_hash].str = current_word;
+          } else {
+            (*wordFreq)[first_hash].occ += 1;
+            if ((*wordFreq)[first_hash].str != current_word) {
+              cerr << "Hash collision detected!\n";
+              exit(1);
             }
-          pc = c; i++;
-      }
-      else{ 
-        if(c == '>' || c == EOF || current_pos >= d->true_end){
-            d->parsed += krw.tot_char;
-            for (size_t i = 0; i < arg->w - 1; i++) {
-                c = fword[i];
-                word.append(1, c);
-                if(first_trigger == 0){fword.append(1, c);}
-                uint64_t hash = krw.addchar(c);
-                if(hash%arg->p==0){
-                    if(first_trigger==0){
-                        first_trigger = 1, start_char = krw.tot_char;
-                        if(fwrite(&start_char,sizeof(start_char),1,d->o)!=1) die("offset write error");
-                        word.erase(0,word.size() - arg->w);
-                    }else{
-                        save_update_word(word,arg->w,*wordFreq,d->parse,0);
-                        d->words++;}
-                }
-            }
-            if(first_trigger==0) { cerr << "No trigger strings found. Please use '--reads' flag. Exiting..." << endl; exit(1); }
-            final_word = word + fword.erase(0,arg->w - 1);
-            save_update_word(final_word,arg->w,*wordFreq,d->parse,1);
-            d->words++; 
-            krw.reset();
-            first_trigger = 0; start_char=0; i=0;
-            word = fword = final_word = "";
-            while(  ((c = f.get()) != EOF) && current_pos <= d->true_end ){
-                current_pos++;
-                if(c=='\n'){break;}
-             }
-            pc = c;
+          }
+          xpthread_mutex_unlock(&map_mutex, __LINE__, __FILE__);
+          
+          d->words++;
+          last_trigger_pos = i;
+          current_word = current_word.substr(current_word.size() - arg->w);
+        } else {
+          // Not the first trigger, save the word from last trigger to here
+          save_update_word(current_word, arg->w, *wordFreq, d->parse, false);
+          d->words++;
+          
+          last_trigger_pos = i;
+          current_word = current_word.substr(current_word.size() - arg->w);
         }
       }
+      
+      pc = c;
+      i++;
     }
+    else { 
+      if (c == '>' || c == EOF || current_pos >= d->true_end) {
+        // End of sequence, add terminator
+        // Create a sequence-specific terminator with the global sequence number
+        local_seq_number++;
+        uint64_t seq_num = global_seq_number + local_seq_number;
+        string terminator = "$";
+        current_word.append(terminator);
+        
+        // Save terminator position
+        uint64_t terminator_pos = base_pos + krw.tot_char;
+        d->terminator_positions.push_back(terminator_pos);
+        
+        // Update the KR window with the terminator characters
+        for (char tc : terminator) {
+            krw.addchar(tc);
+        }
+        
+        // Save the final word to the dictionary
+        save_update_word(current_word, arg->w, *wordFreq, d->parse, true);
+        d->words++;
+        
+        d->parsed += krw.tot_char;
+        base_pos += krw.tot_char;
+        
+        // Reset for next sequence
+        krw.reset();
+        found_first_trigger = false;
+        last_trigger_pos = 0;
+        i = 0;
+        current_word = "";
+        
+        // Skip header line
+        while((c = f.get()) != EOF && current_pos < d->true_end) {
+          current_pos++;
+          if(c == '\n') break;
+        }
+        pc = c;
+      }
+    }
+  }
+  
+  // If we ended with some partial sequence, finalize it
+  if (current_word.size() > 0) {
+    local_seq_number++;
+    uint64_t seq_num = global_seq_number + local_seq_number;
+    string terminator = "$";
+    current_word.append(terminator);
+    
+    uint64_t terminator_pos = base_pos + krw.tot_char;
+    d->terminator_positions.push_back(terminator_pos);
+    
+    for (char tc : terminator) {
+        krw.addchar(tc);
+    }
+    
+    save_update_word(current_word, arg->w, *wordFreq, d->parse, true);
+    d->words++;
+    d->parsed += krw.tot_char;
+  }
   
   f.close(); 
   return NULL;
@@ -160,7 +232,6 @@ Res parallel_parse_fasta(Args& arg, map<uint64_t,word_stats>& wf)
         size_t start = th_sts[i];
         size_t end = th_sts[i+1];
         fseek(fp, start, SEEK_SET);
-        //cout << "scanning " << start << " - " << end << endl;
         for(size_t j=start; j<end; ++j){
             c = fgetc(fp);
             if(c == '>'){hp=j;sf=1;break;}
@@ -180,7 +251,7 @@ Res parallel_parse_fasta(Args& arg, map<uint64_t,word_stats>& wf)
             assert(td[nt-1].true_end <=size);
             td[nt-1].parse = open_aux_file_num(arg.inputFileName.c_str(),EXTPARS0,nt-1,"wb");
             td[nt-1].o = open_aux_file_num(arg.inputFileName.c_str(),EXTOFF0,nt-1,"wb");
-            xpthread_create(&t[nt-1],NULL,&cyclic_mt_parse_fasta,&td[nt-1],__LINE__,__FILE__);
+            xpthread_create(&t[nt-1],NULL,&non_circular_mt_parse_fasta,&td[nt-1],__LINE__,__FILE__);
             nt++;
             tstart = hp+1;
         }
@@ -196,26 +267,43 @@ Res parallel_parse_fasta(Args& arg, map<uint64_t,word_stats>& wf)
     assert(td[nt-1].true_end <=size);
     td[nt-1].parse = open_aux_file_num(arg.inputFileName.c_str(),EXTPARS0,nt-1,"wb");
     td[nt-1].o = open_aux_file_num(arg.inputFileName.c_str(),EXTOFF0,nt-1,"wb");
-    xpthread_create(&t[nt-1],NULL,&cyclic_mt_parse_fasta,&td[nt-1],__LINE__,__FILE__);
+    xpthread_create(&t[nt-1],NULL,&non_circular_mt_parse_fasta,&td[nt-1],__LINE__,__FILE__);
     
     // wait for the threads to finish (in order) and close output files
     size_t tot_char=0;
+    std::vector<uint64_t> all_terminator_positions;
+    // Lock per proteggere l'accesso al vettore globale dei terminatori
+    xpthread_mutex_lock(&terminator_mutex,__LINE__,__FILE__);
+    
     for(int i=0;i<nt;i++) {
       xpthread_join(t[i],NULL,__LINE__,__FILE__); 
+      all_terminator_positions.insert(all_terminator_positions.end(), 
+      td[i].terminator_positions.begin(), 
+      td[i].terminator_positions.end());
       if(arg.verbose) {
-      cout << "s:" << td[i].true_start << "  e:" << td[i].true_end << "  pa:";
+        cout << "s:" << td[i].true_start << "  e:" << td[i].true_end << "  pa:";
       }
-    // close thread-specific output files
-    fclose(td[i].parse);
-    fclose(td[i].o);
-    if(td[i].words>0) {
-      // extra check
-      assert(td[i].parsed>arg.w);
-      tot_char += td[i].parsed;
+      
+      all_terminator_positions.insert(all_terminator_positions.end(), 
+                              td[i].terminator_positions.begin(),
+                              td[i].terminator_positions.end());
+      
+      // close thread-specific output files
+      fclose(td[i].parse);
+      fclose(td[i].o);
+      if(td[i].words>0) {
+        // extra check
+        assert(td[i].parsed>arg.w);
+        tot_char += td[i].parsed;
+      }
+      else assert(i>0); // the first thread must produce some words 
     }
-    else assert(i>0); // the first thread must produce some words 
-    }
+    
+    xpthread_mutex_unlock(&terminator_mutex,__LINE__,__FILE__);
+    std::sort(all_terminator_positions.begin(), all_terminator_positions.end());
+    
     fclose(fp);
     Res res; res.tot_char = tot_char; res.us_th = nt;
+    res.terminator_positions = all_terminator_positions; 
     return res;
 }

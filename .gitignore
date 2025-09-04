@@ -1,0 +1,7 @@
+build/
+*.tar.gz
+*.o
+*.exe
+*.out
+.vscode/
+.DS_Store

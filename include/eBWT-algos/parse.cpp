@@ -26,7 +26,6 @@ typedef struct {
    int w = 10;
 } Args;
 
-
 static void parseArgs(int argc, char** argv, Args *arg ) {
   extern int optind, opterr, optopt;
   extern char *optarg;  
@@ -51,18 +50,17 @@ static void parseArgs(int argc, char** argv, Args *arg ) {
 }
 
 int main(int argc, char** argv) {
-    
+
     // translate command line parameters
     Args arg;
     parseArgs(argc, argv, &arg);
-    
-    
+
     // start measuring wall time clock
     time_t start_wc = time(NULL);
-    
+
     cout << "Computing eBWT of the parse..." << endl;
     parse pars(arg.inputFileName);
-    
+
     cout << "Building the eBWT of the parse took: " << difftime(time(NULL),start_wc) << " wall clock seconds\n";
 
     return 0;

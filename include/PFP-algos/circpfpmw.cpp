@@ -5,7 +5,7 @@
  * This code is adapted from https://github.com/alshai/Big-BWT/blob/master/newscan.cpp
  *
  */
-
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>

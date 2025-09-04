@@ -19,39 +19,57 @@
 using namespace std;
 
 void inverteBWT(std::vector<uint8_t> EBWT, std::vector<uint64_t> ST_P, string I, int alph_size){
-    // Function that inverse the eBWT of a int string using sdsl wavelet trees
-    string wt_filename = I + std::string(".ebwt");
-    cout << "Building the Wavelet tree of the eBWT." << endl;
-    sdsl::wt_blcd<> wt; sdsl::construct(wt,wt_filename,1);
-    vector<uint32_t> C(alph_size+1,0); vector<uint32_t> bkt(alph_size,0);
-    cout << "Building the C vector of the eBWT." << endl;
-    for(int i=0;i<EBWT.size();i++){ bkt[EBWT[i]]++; }
-    for(int i=1;i<C.size();i++){ C[i]=C[i-1]+bkt[i-1]; }
-    
-    string tmp_filename = I + std::string(".rfasta");
-    FILE* fp = fopen(tmp_filename.c_str(), "w+");
+  // Function that inverse the eBWT of a int string using sdsl wavelet trees
+  string wt_filename = I + std::string(".ebwt");
+  cout << "Building the Wavelet tree of the eBWT." << endl;
+  sdsl::wt_blcd<> wt; sdsl::construct(wt,wt_filename,1);
+  vector<uint32_t> C(alph_size+1,0); vector<uint32_t> bkt(alph_size,0);
+  cout << "Building the C vector of the eBWT." << endl;
+  for(int i=0;i<EBWT.size();i++){ bkt[EBWT[i]]++; }
+  for(int i=1;i<C.size();i++){ C[i]=C[i-1]+bkt[i-1]; }
+  
+  string tmp_filename = I + std::string(".rfasta");
+  FILE* fp = fopen(tmp_filename.c_str(), "w+");
 
-    //cout << "Inverting " << ST_P.size() << " sequences." << endl;
-    size_t inverted = 0;
-    for(size_t i=0;i<ST_P.size();++i){
-        std::vector<uint8_t> RP;  
-        int index = ST_P[i]; 
-        uint8_t p = EBWT[index]; 
-        RP.push_back(p);
-        int starting = index;
-        index = C[p]+wt.rank(index,p);
-        while(index != starting){
-            p = EBWT[index];
-            RP.push_back(p);
-            index = C[p]+wt.rank(index,p);
-        }
-        ++inverted;
-        // write the sequence in the correct order
-        reverse(RP.begin(),RP.end()); RP.push_back('\n');
-        if((fwrite(&RP[0], sizeof(uint8_t), RP.size(), fp))!=RP.size()) {cerr << "fwrite failed" << endl;}
-    }
-    cout << "Sequences inverted: " << inverted << endl;
-    fclose(fp);
+  //cout << "Inverting " << ST_P.size() << " sequences." << endl;
+  size_t inverted = 0;
+  for(size_t i=0;i<ST_P.size();++i){
+      std::vector<uint8_t> RP;  
+      int index = ST_P[i]; 
+      uint8_t p = EBWT[index]; 
+      RP.push_back(p);
+      int starting = index;
+      index = C[p]+wt.rank(index,p);
+      while(index != starting){
+          p = EBWT[index];
+          RP.push_back(p);
+          index = C[p]+wt.rank(index,p);
+      }
+      ++inverted;
+      // write the sequence in the correct order, identifying terminators
+      reverse(RP.begin(),RP.end());
+      
+      std::vector<uint8_t> cleaned_sequence;
+      for (size_t j = 0; j < RP.size(); j++) {
+          if (RP[j] == '$') {
+              cleaned_sequence.push_back('$');
+              j++; 
+              while (j < RP.size() && isdigit(RP[j])) {
+                  j++; 
+              }
+              j--; 
+          } else {
+              cleaned_sequence.push_back(RP[j]);
+          }
+      }
+      
+      cleaned_sequence.push_back('\n');
+      if((fwrite(&cleaned_sequence[0], sizeof(uint8_t), cleaned_sequence.size(), fp))!=cleaned_sequence.size()) {
+          cerr << "fwrite failed" << endl;
+      }
+  }
+  cout << "Sequences inverted: " << inverted << endl;
+  fclose(fp);
 }
 
 int main(int argc, char *argv[])

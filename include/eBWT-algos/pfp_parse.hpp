@@ -7,6 +7,7 @@
 #ifndef PFP_PARSE_HPP
 #define PFP_PARSE_HPP
 
+
 #ifndef P64
   typedef uint32_t uint_s;
 #else
@@ -23,6 +24,7 @@ public:
     sdsl::sd_vector<>::select_1_type select_ilist;
     sdsl::sd_vector<>::rank_1_type rank_st;
 
+        
   pfp_parse() {}
 
   pfp_parse(std::string filename)

@@ -170,8 +170,25 @@ void cSAIS(uint_s *s, uint_s *SA, size_t n, size_t K, size_t cs, int level, sd_v
      }
   }
   
+  /*cerr << "SA prima induce L for LMS subs sorting" << endl;
+  for(i=0; i<n; i++){
+    cerr << SA[i] << " ";
+
+  }
+  cerr << endl;*/
+
   // Induce L ans S suffixes to sort the LMS substrings
   induceL(SA, s, bkt, r_s, s_s, b_s, n, K, cs, true, level);
+
+
+ /* cerr << "SA prima induce S for LMS subs sorting" << endl;
+  for(i=0; i<n; i++){
+    cerr << SA[i] << " ";
+
+  }
+  cerr << endl;*/
+
+
   induceS(SA, s, bkt, sn, r_s, s_s, b_s, n, K, cs, true, level); 
   
   free(bkt); // free bucket vector
@@ -188,9 +205,18 @@ void cSAIS(uint_s *s, uint_s *SA, size_t n, size_t K, size_t cs, int level, sd_v
   for(auto idx: onset){ builder.set(idx); }
   sd_vector<> nb_s = sd_vector<>(builder);
   
+  //cerr << "n1=" << n1 << endl;
+
   // Init the name array buffer
   for(i=n1; i<n; ++i) SA[i]=EMPTY;
   
+  /*cerr << "SA prima find the lexicographic names of all LMS substrings" << endl;
+  for(i=0; i<n; i++){
+    cerr << SA[i] << " ";
+
+  }
+  cerr << endl;*/
+
   // find the lexicographic names of all LMS substrings
   uint_s name=1;
   if(n1 > 0){
@@ -236,7 +262,16 @@ void cSAIS(uint_s *s, uint_s *SA, size_t n, size_t K, size_t cs, int level, sd_v
 
   // stage 2: solve the reduced problem
   // recurse if names are not unique yet
+
+  /*cerr << "SA stage 2" << endl;
+  for(i=0; i<n; i++){
+    cerr << SA[i] << " ";
+
+  }
+  cerr << endl;*/
+
   if(name<n1) {
+    //cerr << "RECURSE" << endl;
       cSAIS((uint_s*)s1, SA1, n1, name, sizeof(uint_s), level+1, nb_s);
   } else { // stop the recursion, generate the suffix array of s1 directly
       for(i=0; i<n1; i++){ SA1[s1[i]] = i; }
@@ -293,10 +328,32 @@ void cSAIS(uint_s *s, uint_s *SA, size_t n, size_t K, size_t cs, int level, sd_v
       SA[bkt[chr(j)]--]=j;
   }
   
+  /*cerr << "SA stage 3 prima induce L" << endl;
+  for(i=0; i<n; i++){
+    cerr << SA[i] << " ";
+
+  }
+  cerr << endl;*/
+
   // induce the L and S suffixes to compute the final SA of each level
   induceL(SA, s, bkt, r_s, s_s, b_s, n, K, cs, false, level);
+  
+  /*cerr << "SA stage 3 prima induce S" << endl;
+  for(i=0; i<n; i++){
+    cerr << SA[i] << " ";
+
+  }
+  cerr << endl;*/
+
   induceS(SA, s, bkt, sn, r_s, s_s, b_s, n, K, cs, false, level); 
   
+  /*cerr << "SA stage 3 fine" << endl;
+  for(i=0; i<n; i++){
+    cerr << SA[i] << " ";
+
+  }
+  cerr << endl;*/
+
   // free onset and bucket vectors
   onset.clear();
   free(bkt); 

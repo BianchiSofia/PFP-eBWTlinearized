@@ -32,22 +32,19 @@ public:
 
   pfp_parse_gca(std::string filename)
   {
-
     std::string input = filename + std::string(".sdsl");
     // load serialized parse's data structures.
     std::ifstream in(input);
     b_il.load(in);
-    //select_ilist.load(in);
     b_st.load(in);
-    //rank_st.load(in);
     my_load(ilP,in);
     my_load(offset,in);
     in.close();
-    //for(int i=0;i<b_st.size();++i){ std::cout << b_st[i] << " "; }
-    //std::cout << "\n";
+    
     // compute rank and select data structures for the parse
-    rank_st = sdsl::sd_vector<>::rank_1_type(&b_st);
     select_ilist = sdsl::sd_vector<>::select_1_type(&b_il);
+    rank_st = sdsl::sd_vector<>::rank_1_type(&b_st);
+    
     // read last positions file
     input = filename + std::string(".slast"); 
     read_file(input.c_str(), last);
@@ -66,6 +63,9 @@ public:
     b_ns = sdsl::sd_vector<>(builder);
     rank_ns = sdsl::sd_vector<>::rank_1_type(&b_ns);
     select_ns = sdsl::sd_vector<>::select_1_type(&b_ns);
+    
+    // Output diagnostic information about the number of sequences
+    std::cout << "Number of sequences loaded: " << get_no_seq() << std::endl;
   }
 
   size_t get_last(size_t i){ return get_myint(&last[0],lastLen,i); }
