@@ -1,5 +1,5 @@
 # PFP-eBWT
-PFP-eBWT is a tool for computing the eBWT and optionally the Generalized Conjugate Array (GCA) of string collections using the Prefix-Free Parsing preprocessing (PFP).
+This work presents the exemption of an existing implementation of the Prefix-Free Parsing technique for the computation of the Extended Burrows-Wheeler Transform (PFP-eBWT) in order to support non-circular genomic sequence collections, i.e. where the last character does not precede the first.
 
 # Usage
 
