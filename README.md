@@ -5,9 +5,7 @@ This work presents the exemption of an existing implementation of the Prefix-Fre
 
 ### Construction of the eBWT:
 ```
-usage: pfpebwt [-h] [-w WSIZE] [-p MOD] [-t T] [-n N] [--rle] [--samples]
-               [--GCA] [--reads] [--remainders] [--period] [--invert] [--keep]
-               [--parsing] [--verbose]
+usage: pfpebwt [-h] [-w WSIZE] [-p MOD] 
                input
 
 Tool to compute the eBWT and the GCA of a string collection.
