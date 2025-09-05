@@ -1,4 +1,4 @@
-# PFP-eBWT
+# PFP-eBWTlinearized
 This work presents the exemption of an existing implementation of the Prefix-Free Parsing technique for the computation of the Extended Burrows-Wheeler Transform (PFP-eBWT) in order to support non-circular genomic sequence collections, i.e. where the last character does not precede the first.
 
 # Usage
