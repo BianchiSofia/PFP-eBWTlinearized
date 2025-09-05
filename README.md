@@ -11,13 +11,12 @@ usage: pfpebwt [-h] [-w WSIZE] [-p MOD]
 Tool to compute the eBWT and the GCA of a string collection.
 
 positional arguments:
-  input                 input fasta file name
+  input                     input fasta file name
 
 optional arguments:
-  -h, --help            show this help message and exit
-  -w WSIZE, --wsize WSIZE
-                        sliding window size (def. 10)
-  -p MOD, --mod MOD     hash modulus (def. 100)
+  -h, --help                show this help message and exit
+  -w WSIZE, --wsize WSIZE   sliding window size (def. 10)
+  -p MOD, --mod MOD         hash modulus (def. 100)
 ```
 The default PFP algorithm will run with one prime number and one remainder to search for the trigger strings. 
 The `.info` file contains more information on the output files.
